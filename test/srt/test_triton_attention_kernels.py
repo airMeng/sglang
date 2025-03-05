@@ -23,10 +23,6 @@ class TestTritonAttention(unittest.TestCase):
         """Set all random seeds for reproducibility."""
         random.seed(seed)
         torch.manual_seed(seed)
-        torch.cuda.manual_seed(seed)
-        torch.cuda.manual_seed_all(seed)
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
 
     def setUp(self):
         # Set seeds before each test method
@@ -36,24 +32,24 @@ class TestTritonAttention(unittest.TestCase):
         dtype = torch.bfloat16
 
         b_seq_len_prefix = torch.randint(
-            1, N_CTX // 2, (B,), dtype=torch.int32, device="cuda"
+            1, N_CTX // 2, (B,), dtype=torch.int32, device="xpu"
         )
         b_seq_len_extend = torch.randint(
-            1, N_CTX // 2, (B,), dtype=torch.int32, device="cuda"
+            1, N_CTX // 2, (B,), dtype=torch.int32, device="xpu"
         )
         b_seq_len = b_seq_len_prefix + b_seq_len_extend
         max_len_in_batch = torch.max(b_seq_len, 0)[0].item()
 
-        b_req_idx = torch.arange(B, dtype=torch.int32, device="cuda")
-        b_start_loc = torch.zeros((B,), dtype=torch.int32, device="cuda")
+        b_req_idx = torch.arange(B, dtype=torch.int32, device="xpu")
+        b_start_loc = torch.zeros((B,), dtype=torch.int32, device="xpu")
         b_start_loc[1:] = torch.cumsum(b_seq_len[:-1], 0)
-        b_start_loc_extend = torch.zeros((B,), dtype=torch.int32, device="cuda")
+        b_start_loc_extend = torch.zeros((B,), dtype=torch.int32, device="xpu")
         b_start_loc_extend[1:] = torch.cumsum(b_seq_len_extend[:-1], 0)
 
-        kv_indptr = torch.zeros((B + 1,), dtype=torch.int32, device="cuda")
+        kv_indptr = torch.zeros((B + 1,), dtype=torch.int32, device="xpu")
         kv_indptr[1 : B + 1] = torch.cumsum(b_seq_len_prefix[:B], dim=0)
         kv_indices = torch.zeros(
-            (b_seq_len_prefix.sum().item(),), dtype=torch.int32, device="cuda"
+            (b_seq_len_prefix.sum().item(),), dtype=torch.int32, device="xpu"
         )
 
         for i in range(B):
@@ -64,15 +60,15 @@ class TestTritonAttention(unittest.TestCase):
         total_token_num = torch.sum(b_seq_len).item()
         extend_token_num = torch.sum(b_seq_len_extend).item()
         k_buffer = torch.empty(
-            (total_token_num, H_KV, D), dtype=dtype, device="cuda"
+            (total_token_num, H_KV, D), dtype=dtype, device="xpu"
         ).normal_(mean=0.1, std=0.2)
         v_buffer = torch.empty(
-            (total_token_num, H_KV, D), dtype=dtype, device="cuda"
+            (total_token_num, H_KV, D), dtype=dtype, device="xpu"
         ).normal_(mean=0.1, std=0.2)
 
-        k_extend = torch.empty((extend_token_num, H_KV, D), dtype=dtype, device="cuda")
-        v_extend = torch.empty((extend_token_num, H_KV, D), dtype=dtype, device="cuda")
-        q_extend = torch.empty((extend_token_num, H_Q, D), dtype=dtype, device="cuda")
+        k_extend = torch.empty((extend_token_num, H_KV, D), dtype=dtype, device="xpu")
+        v_extend = torch.empty((extend_token_num, H_KV, D), dtype=dtype, device="xpu")
+        q_extend = torch.empty((extend_token_num, H_Q, D), dtype=dtype, device="xpu")
         for i in range(B):
             extend_start_in_buffer = b_start_loc[i] + b_seq_len_prefix[i]
             extend_end_in_buffer = b_start_loc[i] + b_seq_len[i]
@@ -85,20 +81,20 @@ class TestTritonAttention(unittest.TestCase):
                 extend_start_in_buffer:extend_end_in_buffer
             ]
             q_extend[extend_start:extend_end] = torch.empty(
-                (b_seq_len_extend[i], H_Q, D), dtype=dtype, device="cuda"
+                (b_seq_len_extend[i], H_Q, D), dtype=dtype, device="xpu"
             ).normal_(mean=0.1, std=0.2)
 
-        o_extend = torch.empty((extend_token_num, H_Q, D), dtype=dtype, device="cuda")
+        o_extend = torch.empty((extend_token_num, H_Q, D), dtype=dtype, device="xpu")
         o_extend_mask = torch.empty(
-            (extend_token_num, H_Q, D), dtype=dtype, device="cuda"
+            (extend_token_num, H_Q, D), dtype=dtype, device="xpu"
         )
         o_redundant = torch.empty(
-            (extend_token_num, H_Q, D), dtype=dtype, device="cuda"
+            (extend_token_num, H_Q, D), dtype=dtype, device="xpu"
         )
 
         b_seq_len_extend = b_seq_len - b_seq_len_prefix
         max_len_extend = torch.max(b_seq_len_extend, 0)[0].item()
-        qo_indptr = torch.zeros((B + 1,), dtype=torch.int32, device="cuda")
+        qo_indptr = torch.zeros((B + 1,), dtype=torch.int32, device="xpu")
         qo_indptr[1 : B + 1] = torch.cumsum(b_seq_len_extend[:B], dim=0)
 
         custom_mask = None
@@ -121,9 +117,9 @@ class TestTritonAttention(unittest.TestCase):
 
         b_seq_mask_len = b_seq_len_extend * b_seq_len
         custom_mask = torch.ones(
-            (b_seq_mask_len.sum().item(),), dtype=torch.bool, device="cuda"
+            (b_seq_mask_len.sum().item(),), dtype=torch.bool, device="xpu"
         )
-        mask_indptr = torch.zeros((B + 1,), dtype=torch.int64, device="cuda")
+        mask_indptr = torch.zeros((B + 1,), dtype=torch.int64, device="xpu")
         mask_indptr[1 : B + 1] = torch.cumsum(b_seq_mask_len[:B], dim=0)
         for i in range(B):
             causal_mask = (
@@ -184,14 +180,14 @@ class TestTritonAttention(unittest.TestCase):
         max_seq_len = max(seq_lens)
 
         # Create random input tensors
-        q = torch.randn(sum(seq_lens), num_heads, head_dim, device="cuda")
-        k = torch.randn(sum(seq_lens), num_heads, head_dim, device="cuda")
-        v = torch.randn(sum(seq_lens), num_heads, head_dim, device="cuda")
-        o = torch.zeros(sum(seq_lens), num_heads, head_dim, device="cuda")
+        q = torch.randn(sum(seq_lens), num_heads, head_dim, device="xpu")
+        k = torch.randn(sum(seq_lens), num_heads, head_dim, device="xpu")
+        v = torch.randn(sum(seq_lens), num_heads, head_dim, device="xpu")
+        o = torch.zeros(sum(seq_lens), num_heads, head_dim, device="xpu")
 
         # Create b_start_loc and b_seq_len tensors
-        b_start_loc = torch.tensor([0, seq_lens[0]], device="cuda")
-        b_seq_len = torch.tensor(seq_lens, device="cuda")
+        b_start_loc = torch.tensor([0, seq_lens[0]], device="xpu")
+        b_seq_len = torch.tensor(seq_lens, device="xpu")
 
         context_attention_fwd(
             q, k, v, o, b_start_loc, b_seq_len, max_seq_len, is_causal=is_causal
@@ -231,25 +227,25 @@ class TestTritonAttention(unittest.TestCase):
         num_kv_splits = 8
 
         # q represents the new token being generated, one per batch
-        q = torch.randn(B, H_Q, D, dtype=dtype, device="cuda")
+        q = torch.randn(B, H_Q, D, dtype=dtype, device="xpu")
 
         # k_buffer and v_buffer represent all previous tokens
-        k_buffer = torch.randn(total_tokens, H_KV, D, dtype=dtype, device="cuda")
-        v_buffer = torch.randn(total_tokens, H_KV, D, dtype=dtype, device="cuda")
+        k_buffer = torch.randn(total_tokens, H_KV, D, dtype=dtype, device="xpu")
+        v_buffer = torch.randn(total_tokens, H_KV, D, dtype=dtype, device="xpu")
 
         # o will have the same shape as q
-        o = torch.zeros(B, H_Q, D, dtype=dtype, device="cuda")
+        o = torch.zeros(B, H_Q, D, dtype=dtype, device="xpu")
 
-        b_seq_len = torch.full((B,), seq_len, device="cuda")
+        b_seq_len = torch.full((B,), seq_len, device="xpu")
 
-        kv_indptr = torch.zeros((B + 1,), dtype=torch.int32, device="cuda")
+        kv_indptr = torch.zeros((B + 1,), dtype=torch.int32, device="xpu")
         kv_indptr[1 : B + 1] = torch.cumsum(b_seq_len[:B], dim=0)
-        kv_indices = torch.arange(total_tokens, device="cuda")
+        kv_indices = torch.arange(total_tokens, device="xpu")
 
         attn_logits = torch.empty(
             (B, H_Q, num_kv_splits, D + 1),
             dtype=torch.float32,
-            device="cuda",
+            device="xpu",
         )
 
         decode_attention_fwd(
@@ -287,26 +283,26 @@ class TestTritonAttention(unittest.TestCase):
         num_kv_splits = 8
 
         # q represents the new token being generated, one per batch
-        q = torch.randn(B, H_Q, D, dtype=dtype, device="cuda")
+        q = torch.randn(B, H_Q, D, dtype=dtype, device="xpu")
 
         # k_buffer and v_buffer represent all previous tokens
-        k_buffer = torch.randn(total_tokens, H_KV, D, dtype=dtype, device="cuda")
-        v_buffer = torch.randn(total_tokens, H_KV, D_V, dtype=dtype, device="cuda")
+        k_buffer = torch.randn(total_tokens, H_KV, D, dtype=dtype, device="xpu")
+        v_buffer = torch.randn(total_tokens, H_KV, D_V, dtype=dtype, device="xpu")
 
         # o will have the same shape as q
-        o = torch.zeros(B, H_Q, D_V, dtype=dtype, device="cuda")
-        o_grouped = torch.zeros(B, H_Q, D_V, dtype=dtype, device="cuda")
+        o = torch.zeros(B, H_Q, D_V, dtype=dtype, device="xpu")
+        o_grouped = torch.zeros(B, H_Q, D_V, dtype=dtype, device="xpu")
 
-        b_seq_len = torch.full((B,), seq_len, device="cuda")
+        b_seq_len = torch.full((B,), seq_len, device="xpu")
 
-        kv_indptr = torch.zeros((B + 1,), dtype=torch.int32, device="cuda")
+        kv_indptr = torch.zeros((B + 1,), dtype=torch.int32, device="xpu")
         kv_indptr[1 : B + 1] = torch.cumsum(b_seq_len[:B], dim=0)
-        kv_indices = torch.arange(total_tokens, device="cuda")
+        kv_indices = torch.arange(total_tokens, device="xpu")
 
         attn_logits = torch.empty(
             (B, H_Q, num_kv_splits, D_V + 1),
             dtype=torch.float32,
-            device="cuda",
+            device="xpu",
         )
 
         decode_attention_fwd_normal(
@@ -324,7 +320,7 @@ class TestTritonAttention(unittest.TestCase):
         attn_logits1 = torch.empty(
             (B, H_Q, num_kv_splits, D_V + 1),
             dtype=torch.float32,
-            device="cuda",
+            device="xpu",
         )
 
         decode_attention_fwd_grouped(

@@ -102,7 +102,8 @@ class TestPerTokenGroupQuantFP8(TestFP8Base):
 
 
 class TestW8A8BlockFP8Matmul(TestFP8Base):
-    def test_w8a8_block_fp8_matmul(self):
+    @
+    def test_w8a8_block_fp8_matmul(self, device):
         if torch.cuda.get_device_capability()[0] < 9:
             return
         A, A_quant_gt, A_scale_gt = self._make_A(
