@@ -172,8 +172,8 @@ def _layer_norm_fwd_1pass_kernel(
 @lru_cache
 def _get_sm_count(device: torch.device) -> int:
     """Get and cache the SM count for a given device."""
-    props = torch.cuda.get_device_properties(device)
-    return props.multi_processor_count
+    props = torch.xpu.get_device_properties(device)
+    return props.gpu_subslice_count
 
 
 def calc_rows_per_block(M: int, device: torch.device) -> int:

@@ -90,6 +90,16 @@ from sglang.srt.utils import (
 from sglang.srt.utils.hf_transformers_utils import get_tokenizer
 
 
+_DEBUG_XPU_SYNC = os.environ.get("SGLANG_DEBUG_XPU_SYNC") == "1"
+
+
+def debug_xpu_sync(device, marker):
+    if not (_DEBUG_XPU_SYNC and hasattr(torch, "xpu") and torch.xpu.is_available()):
+        return
+    print(f"[debug-xpu-sync] {marker}", flush=True)
+    torch.xpu.synchronize(device)
+
+
 def start_profile(profile_activities, profile_record_shapes=False, rank_print=print):
     """
     Abstracted function to start profiling based on profile_activities.
@@ -409,24 +419,38 @@ def extend(reqs, model_runner):
         enable_overlap=False,
         spec_algorithm=SpeculativeAlgorithm.NONE,
     )
+    debug_xpu_sync(model_runner.device, "extend: ScheduleBatch.init_new")
     batch.prepare_for_extend()
+    debug_xpu_sync(model_runner.device, "extend: batch.prepare_for_extend")
     _maybe_prepare_mlp_sync_batch(batch, model_runner)
+    debug_xpu_sync(model_runner.device, "extend: _maybe_prepare_mlp_sync_batch")
     model_worker_batch = batch.get_model_worker_batch()
+    debug_xpu_sync(model_runner.device, "extend: batch.get_model_worker_batch")
     forward_batch = ForwardBatch.init_new(model_worker_batch, model_runner)
+    debug_xpu_sync(model_runner.device, "extend: ForwardBatch.init_new")
     logits_output = model_runner.forward(forward_batch).logits_output
+    debug_xpu_sync(model_runner.device, "extend: model_runner.forward")
     next_token_ids = model_runner.sample(logits_output, forward_batch)
+    debug_xpu_sync(model_runner.device, "extend: model_runner.sample")
     return next_token_ids, logits_output.next_token_logits, batch
 
 
 @torch.no_grad
 def decode(input_token_ids, batch, model_runner):
     batch.output_ids = input_token_ids
+    debug_xpu_sync(model_runner.device, "decode: batch.output_ids assigned")
     batch.prepare_for_decode()
+    debug_xpu_sync(model_runner.device, "decode: batch.prepare_for_decode")
     _maybe_prepare_mlp_sync_batch(batch, model_runner)
+    debug_xpu_sync(model_runner.device, "decode: _maybe_prepare_mlp_sync_batch")
     model_worker_batch = batch.get_model_worker_batch()
+    debug_xpu_sync(model_runner.device, "decode: batch.get_model_worker_batch")
     forward_batch = ForwardBatch.init_new(model_worker_batch, model_runner)
+    debug_xpu_sync(model_runner.device, "decode: ForwardBatch.init_new")
     logits_output = model_runner.forward(forward_batch).logits_output
+    debug_xpu_sync(model_runner.device, "decode: model_runner.forward")
     next_token_ids = model_runner.sample(logits_output, forward_batch)
+    debug_xpu_sync(model_runner.device, "decode: model_runner.sample")
     return next_token_ids, logits_output.next_token_logits
 
 
@@ -562,6 +586,7 @@ def latency_test_run_once(
 
     model_runner.req_to_token_pool.clear()
     model_runner.token_to_kv_pool_allocator.clear()
+    debug_xpu_sync(device, "latency_test_run_once: pools cleared")
 
     measurement_results = {
         "run_name": run_name,
@@ -649,7 +674,7 @@ def latency_test_run_once(
         tot_latency += latency
         throughput = batch_size / latency
         decode_latencies.append(latency)
-        if i < 5 or (log_decode_step > 0 and i % log_decode_step == 0):
+        if True: #i < 100 or (log_decode_step > 0 and i % log_decode_step == 0):
             rank_print(
                 f"Decode {i}. Batch size: {batch_size}, latency: {latency:6.5f} s, throughput: {throughput:9.2f} token/s"
             )
@@ -725,6 +750,7 @@ def latency_test(
     )
 
     rank_print("Benchmark ...")
+    torch.xpu.empty_cache()
 
     custom_inputs = _read_prompts_from_file(bench_args.prompt_filename, rank_print)
     custom_inputs = [tokenizer.encode(p.strip()) for p in custom_inputs]

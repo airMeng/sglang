@@ -675,6 +675,7 @@ class Scheduler(
             self.tp_worker.model_runner.hybrid_gdn_config is not None
             or self.tp_worker.model_runner.mamba2_config is not None
         )
+        import pdb; pdb.set_trace()
 
         self.sliding_window_size = None
         if self.is_hybrid_swa:
@@ -2934,7 +2935,7 @@ class Scheduler(
                 self.draft_worker.clear_cache_pool()
 
             # TODO: allow optional empty cache
-            torch.cuda.empty_cache()
+            # torch.cuda.empty_cache()
             logger.info("Cache flushed successfully!")
             success = True
         else:

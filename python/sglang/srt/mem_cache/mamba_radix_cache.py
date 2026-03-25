@@ -419,6 +419,7 @@ class MambaRadixCache(BasePrefixCache):
         self.page_size = params.page_size
         self.disable = params.disable
         self.enable_mamba_extra_buffer = params.enable_mamba_extra_buffer
+        import pdb; pdb.set_trace()
 
         if not self.enable_mamba_extra_buffer:
             assert (

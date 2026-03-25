@@ -110,7 +110,7 @@ class Qwen3_5GatedDeltaNet(nn.Module):
         config: Qwen3_5TextConfig,
         layer_id: int,
         quant_config: Optional[QuantizationConfig] = None,
-        alt_stream: Optional[torch.cuda.Stream] = None,
+        alt_stream: Optional[torch.xpu.Stream] = None,
         prefix: str = "",
     ) -> None:
         super().__init__()
@@ -411,10 +411,10 @@ class Qwen3_5GatedDeltaNet(nn.Module):
             and get_is_capture_mode()
             and seq_len < DUAL_STREAM_TOKEN_THRESHOLD
         ):
-            current_stream = torch.cuda.current_stream()
+            current_stream = torch.xpu.current_stream()
             self.alt_stream.wait_stream(current_stream)
             projected_states_qkvz, _ = self.in_proj_qkvz(hidden_states)
-            with torch.cuda.stream(self.alt_stream):
+            with torch.xpu.stream(self.alt_stream):
                 projected_states_ba, _ = self.in_proj_ba(hidden_states)
             current_stream.wait_stream(self.alt_stream)
         else:
@@ -500,7 +500,7 @@ class Qwen3_5LinearDecoderLayer(nn.Module):
         layer_id: int,
         quant_config: Optional[QuantizationConfig] = None,
         prefix: str = "",
-        alt_stream: Optional[torch.cuda.Stream] = None,
+        alt_stream: Optional[torch.xpu.Stream] = None,
         is_nextn: bool = False,
     ) -> None:
         super().__init__()
@@ -626,7 +626,7 @@ class Qwen3_5AttentionDecoderLayer(nn.Module):
         layer_id: int,
         quant_config: Optional[QuantizationConfig] = None,
         prefix: str = "",
-        alt_stream: Optional[torch.cuda.Stream] = None,
+        alt_stream: Optional[torch.xpu.Stream] = None,
         is_nextn: bool = False,
     ) -> None:
         super().__init__()
@@ -768,11 +768,11 @@ class Qwen3_5AttentionDecoderLayer(nn.Module):
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Apply Q/K normalization with optional alt_stream overlap."""
         if self.alt_stream is not None and get_is_capture_mode():
-            current_stream = torch.cuda.current_stream()
+            current_stream = torch.xpu.current_stream()
             self.alt_stream.wait_stream(current_stream)
             q_by_head = q.reshape(-1, self.head_dim)
             q_by_head = self.q_norm(q_by_head)
-            with torch.cuda.stream(self.alt_stream):
+            with torch.xpu.stream(self.alt_stream):
                 k_by_head = k.reshape(-1, self.head_dim)
                 k_by_head = self.k_norm(k_by_head)
             current_stream.wait_stream(self.alt_stream)
@@ -891,7 +891,7 @@ class Qwen3_5ForCausalLM(nn.Module):
         self.hidden_size = config.hidden_size
         self.pp_group = get_pp_group()
 
-        alt_stream = torch.cuda.Stream() if _is_cuda else None
+        alt_stream = torch.xpu.Stream()
 
         # Embedding layer
         if self.pp_group.is_first_rank:
@@ -1326,8 +1326,8 @@ class Qwen3_5ForConditionalGeneration(Qwen3VLForConditionalGeneration):
         if self.pp_group.is_last_rank and head is not None:
             del self.lm_head.weight
             self.lm_head.weight = head
-        torch.cuda.empty_cache()
-        torch.cuda.synchronize()
+        torch.xpu.empty_cache()
+        torch.xpu.synchronize()
 
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
         stacked_params_mapping = [
@@ -1427,8 +1427,8 @@ class Qwen3_5MoeForConditionalGeneration(Qwen3VLForConditionalGeneration):
         if self.pp_group.is_last_rank and head is not None:
             del self.lm_head.weight
             self.lm_head.weight = head
-        torch.cuda.empty_cache()
-        torch.cuda.synchronize()
+        torch.xpu.empty_cache()
+        torch.xpu.synchronize()
 
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
         stacked_params_mapping = [

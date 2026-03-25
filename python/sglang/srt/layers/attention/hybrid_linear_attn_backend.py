@@ -833,6 +833,7 @@ class HybridLinearAttnBackend(AttentionBackend):
             return self.full_attn_backend.forward_decode(
                 q, k, v, layer, forward_batch, save_kv_cache, **kwargs
             )
+            # return q
         # Linear attention backend
         return self.linear_attn_backend.forward_decode(
             q=q,
