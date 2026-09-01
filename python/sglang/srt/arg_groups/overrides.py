@@ -1573,6 +1573,7 @@ _A2A_EP_SPANNING_BACKENDS = frozenset(
     {
         "megamoe",
         "deepep",
+        "deepsymm",
         "deepep_v2",
         "mooncake",
         "nixl",

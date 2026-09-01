@@ -77,6 +77,39 @@ has_triton_kernels = is_triton_kernels_available()
 _UE8M0_ONE = 127
 
 
+def _xpu_mxfp4_dispatch_tensors(dispatch_output):
+    from sglang.srt.layers.moe.token_dispatcher import DispatchOutputChecker
+
+    if DispatchOutputChecker.format_is_deepep_normal(dispatch_output):
+        valid_experts = dispatch_output.topk_ids >= 0
+        return (
+            dispatch_output.hidden_states,
+            dispatch_output.topk_weights * valid_experts,
+            dispatch_output.topk_ids.clamp_min(0),
+            True,
+        )
+
+    topk_weights, topk_ids, _ = dispatch_output.topk_output
+    return dispatch_output.hidden_states, topk_weights, topk_ids, False
+
+
+def _xpu_mxfp4_combine_input(output, dispatch_output, is_deepep_normal):
+    if is_deepep_normal:
+        from sglang.srt.layers.moe.token_dispatcher.deepep import (
+            DeepEPNormalCombineInput,
+        )
+
+        return DeepEPNormalCombineInput(
+            hidden_states=output,
+            topk_ids=dispatch_output.topk_ids,
+            topk_weights=dispatch_output.topk_weights,
+        )
+
+    from sglang.srt.layers.moe.token_dispatcher import StandardCombineInput
+
+    return StandardCombineInput(hidden_states=output)
+
+
 @lru_cache(maxsize=1)
 def _is_sm107_supported() -> bool:
     return get_device_capability() == (10, 7)
@@ -1488,8 +1521,14 @@ class Mxfp4MoEMethod(FusedMoEMethodBase):
         if _use_aiter and DispatchOutputChecker.format_is_deepep(dispatch_output):
             return self._apply_aiter(layer, dispatch_output)
 
-        x = dispatch_output.hidden_states
-        topk_output = dispatch_output.topk_output
+        if use_intel_xpu_backend():
+            x, topk_weights, topk_ids, is_deepep_normal = (
+                _xpu_mxfp4_dispatch_tensors(dispatch_output)
+            )
+            topk_output = None if is_deepep_normal else dispatch_output.topk_output
+        else:
+            x = dispatch_output.hidden_states
+            topk_output = dispatch_output.topk_output
         if _is_cpu:
             if use_intel_amx_backend(layer):
                 from sglang.srt.layers.moe.topk import apply_topk_weights_cpu
@@ -1534,8 +1573,12 @@ class Mxfp4MoEMethod(FusedMoEMethodBase):
             # packed MXFP4 weights directly, so no dequantization happens.
             from sgl_kernel import fused_experts as sgl_fused_experts
 
-            assert TopKOutputChecker.format_is_standard(topk_output)
-            topk_weights, topk_ids, _ = topk_output
+            if topk_output is not None:
+                assert TopKOutputChecker.format_is_standard(topk_output)
+            elif x.shape[0] == 0:
+                return _xpu_mxfp4_combine_input(
+                    torch.empty_like(x), dispatch_output, is_deepep_normal
+                )
             moe_runner_config = self.moe_runner_config
             output = sgl_fused_experts(
                 x,
@@ -1556,7 +1599,9 @@ class Mxfp4MoEMethod(FusedMoEMethodBase):
                 gemm1_limit=moe_runner_config.gemm1_clamp_limit,
                 swiglu_limit=moe_runner_config.swiglu_limit,
             )
-            return StandardCombineInput(hidden_states=output)
+            return _xpu_mxfp4_combine_input(
+                output, dispatch_output, is_deepep_normal
+            )
 
         if self.use_marlin:
             assert TopKOutputChecker.format_is_standard(topk_output)

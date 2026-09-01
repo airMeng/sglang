@@ -35,10 +35,12 @@ from sglang.srt.utils import (
     is_flashinfer_available,
     is_hip,
     is_npu,
+    is_xpu,
     load_json_config,
 )
 
 _is_npu = is_npu()
+_is_xpu = is_xpu()
 _use_zbal = _is_npu and envs.SGLANG_ZBAL_LOCAL_MEM_SIZE.get() > 0
 
 if TYPE_CHECKING:
@@ -48,6 +50,8 @@ try:
     if _use_zbal:
         from zbal.zbal.deepep_adaptor import Config
         from zbal.zbal_buffer import Buffer
+    elif _is_xpu:
+        from deep_ep_xpu import Buffer, Config
     else:
         from deep_ep import Buffer, Config
 
@@ -72,6 +76,44 @@ _use_aiter = get_bool_env_var("SGLANG_USE_AITER") and is_hip()
 logger = logging.getLogger(__name__)
 
 _NVSHMEM_QP_DEPTH_DEFAULT = 1024
+
+
+def _get_comm_unit_count() -> int:
+    return Buffer.num_eus if _is_xpu else Buffer.num_sms
+
+
+def _get_local_buffer_size_hint(config, hidden_bytes: int, num_ranks: int) -> int:
+    if _is_xpu:
+        return config.get_pcie_buffer_size_hint(hidden_bytes, num_ranks)
+    return config.get_nvl_buffer_size_hint(hidden_bytes, num_ranks)
+
+
+def _get_rdma_buffer_size_hint(config, hidden_bytes: int, num_ranks: int) -> int:
+    if _is_xpu:
+        return 0
+    return config.get_rdma_buffer_size_hint(hidden_bytes, num_ranks)
+
+
+def _create_config(config_values: dict):
+    if not _is_xpu:
+        return Config(**config_values)
+
+    values = dict(config_values)
+    aliases = {
+        "num_sms": "num_eus",
+        "num_max_nvl_chunked_send_tokens": "num_max_pcie_chunked_send_tokens",
+        "num_max_nvl_chunked_recv_tokens": "num_max_pcie_chunked_recv_tokens",
+    }
+    for source, target in aliases.items():
+        if source in values:
+            values[target] = values.pop(source)
+    return Config(**values)
+
+
+def _create_buffer(group, num_local_bytes: int, num_rdma_bytes: int, **kwargs):
+    if _is_xpu:
+        kwargs.pop("allow_mnnvl", None)
+    return Buffer(group, num_local_bytes, num_rdma_bytes, **kwargs)
 
 
 def _set_nvshmem_qp_depth(num_max_dispatch_tokens_per_rank: int) -> None:
@@ -223,11 +265,11 @@ class DeepEPBuffer:
                 or Buffer.get_combine_config(group.size()),
             ):
                 num_nvl_bytes = max(
-                    config.get_nvl_buffer_size_hint(hidden_bytes, group.size()),
+                    _get_local_buffer_size_hint(config, hidden_bytes, group.size()),
                     num_nvl_bytes,
                 )
                 num_rdma_bytes = max(
-                    config.get_rdma_buffer_size_hint(hidden_bytes, group.size()),
+                    _get_rdma_buffer_size_hint(config, hidden_bytes, group.size()),
                     num_rdma_bytes,
                 )
         if deepep_mode.enable_low_latency():
@@ -261,7 +303,7 @@ class DeepEPBuffer:
         else:
             raise NotImplementedError
 
-        if not _is_npu:
+        if not _is_npu and not _is_xpu:
             total_num_sms = torch.cuda.get_device_properties(
                 device="cuda"
             ).multi_processor_count
@@ -292,11 +334,13 @@ class DeepEPBuffer:
         #   cu12x -> fzyzcjy/DeepEP, which has no use_fabric kwarg but already
         #            auto-enables fabric in C++ when supported, so we skip it:
         #            https://github.com/fzyzcjy/DeepEP/blob/814e508537c6ffc775d59f6f1b9ba43f3a65968c/csrc/deep_ep.cpp#L52
-        is_cu12 = get_cuda_version()[0] == 12
+        is_cu12 = not _is_xpu and get_cuda_version()[0] == 12
         if not is_cu12 and use_mnnvl_fabric:
             buffer_kwargs["use_fabric"] = True
 
-        state.buffer = Buffer(group, num_nvl_bytes, num_rdma_bytes, **buffer_kwargs)
+        state.buffer = _create_buffer(
+            group, num_nvl_bytes, num_rdma_bytes, **buffer_kwargs
+        )
         return state.buffer
 
     @classmethod
@@ -343,15 +387,15 @@ class DeepEPConfig(BaseDispatcherConfig):
             config_dispatch = config_parsed["normal_dispatch"]
             config_combine = config_parsed["normal_combine"]
 
-            self.normal_dispatch_config = Config(**config_dispatch)
-            self.normal_combine_config = Config(**config_combine)
+            self.normal_dispatch_config = _create_config(config_dispatch)
+            self.normal_combine_config = _create_config(config_combine)
 
             assert config_dispatch["num_sms"] == config_combine["num_sms"]
             self.num_sms = config_dispatch["num_sms"]
         else:
             self.normal_dispatch_config = None
             self.normal_combine_config = None
-            self.num_sms = Buffer.num_sms
+            self.num_sms = _get_comm_unit_count()
 
     @classmethod
     def get_instance(cls):
@@ -374,8 +418,8 @@ class _DeepEPDispatcherImplBase:
     ):
         if not use_deepep:
             raise ImportError(
-                "DeepEP is not installed. Please install DeepEP package from "
-                "https://github.com/deepseek-ai/deepep."
+                "DeepEP-compatible communication backend is not installed. "
+                "Install DeepSymm on Intel XPU or DeepEP on CUDA."
             )
 
         self.group = group
@@ -629,7 +673,12 @@ class _DeepEPDispatcherImplNormal(_DeepEPDispatcherImplBase):
         topk_weights: torch.Tensor,
     ):
 
-        if deep_gemm_wrapper.ENABLE_JIT_DEEPGEMM or _use_aiter or _is_npu:
+        if (
+            deep_gemm_wrapper.ENABLE_JIT_DEEPGEMM
+            or _use_aiter
+            or _is_npu
+            or _is_xpu
+        ):
             output = hidden_states
         else:
             raise NotImplementedError()  # triton runner was supported but it's temporarily disabled

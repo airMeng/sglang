@@ -2217,6 +2217,7 @@ class ServerArgs:
             choices=[
                 "none",
                 "deepep",
+                "deepsymm",
                 "mooncake",
                 "nixl",
                 "mori",
@@ -2358,6 +2359,7 @@ class ServerArgs:
         Literal[
             "none",
             "deepep",
+            "deepsymm",
             "mooncake",
             "nixl",
             "mori",
@@ -2373,6 +2375,7 @@ class ServerArgs:
             choices=[
                 "none",
                 "deepep",
+                "deepsymm",
                 "mooncake",
                 "nixl",
                 "mori",

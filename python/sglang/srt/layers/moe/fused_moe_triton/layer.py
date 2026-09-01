@@ -172,7 +172,7 @@ def create_moe_dispatcher(moe_runner_config: MoeRunnerConfig) -> BaseDispatcher:
         # StandardDispatcher is created but never invoked.
         return StandardDispatcher(moe_runner_config)
     elif (
-        a2a_backend.is_deepep()
+        a2a_backend.uses_deepep_dispatcher()
         or a2a_backend.is_mooncake()
         or a2a_backend.is_mori()
         or a2a_backend.is_nixl()

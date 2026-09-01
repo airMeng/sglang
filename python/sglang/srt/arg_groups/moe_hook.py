@@ -26,7 +26,7 @@ from sglang.srt.connector import ConnectorType
 from sglang.srt.environ import envs
 from sglang.srt.model_executor.cuda_graph_config import Backend, Phase, with_phase
 from sglang.srt.runtime_context import get_platform
-from sglang.srt.utils.common import parse_connector_type
+from sglang.srt.utils.common import is_xpu, parse_connector_type
 
 logger = logging.getLogger(__name__)
 
@@ -140,6 +140,36 @@ def handle_a2a_moe(server_args: Any):
             server_args, "_handle_a2a_moe", enforce_shared_experts_fusion=True
         )
         logger.info(f"Waterfill is enabled with moe_a2a_backend='{a2a_backend}'.")
+
+    if a2a_backend == "deepsymm":
+        if not is_xpu():
+            raise ValueError("moe_a2a_backend='deepsymm' requires Intel XPU")
+        if cfg.deepep_mode == "low_latency":
+            raise ValueError(
+                "DeepSymm phase-1 integration supports only --deepep-mode normal"
+            )
+        if cfg.deepep_mode == "auto":
+            declare_resolution(
+                server_args,
+                "_handle_a2a_moe",
+                deepep_mode="normal",
+            )
+            logger.warning("auto set deepep_mode=`normal` for DeepSymm EP")
+        logger.warning("Graph capture is disabled for DeepSymm normal mode")
+        declare_resolution(
+            server_args,
+            "_handle_a2a_moe",
+            cuda_graph_config=with_phase(
+                cfg.cuda_graph_config, Phase.DECODE, backend=Backend.DISABLED
+            ),
+        )
+        declare_resolution(
+            server_args,
+            "_handle_a2a_moe",
+            cuda_graph_config=with_phase(
+                cfg.cuda_graph_config, Phase.PREFILL, backend=Backend.DISABLED
+            ),
+        )
 
     if a2a_backend == "deepep":
         if cfg.moe_runner_backend == "flashinfer_cutedsl":

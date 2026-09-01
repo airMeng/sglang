@@ -217,7 +217,7 @@ class GptOssSparseMoeBlock(nn.Module):
         self.top_k = config.num_experts_per_tok
         experts_type = get_moe_impl_class(quant_config)
         extra_kwargs = {}
-        if experts_type.__name__ == "FusedMoE":
+        if experts_type is FusedMoE or get_moe_a2a_backend().is_deepsymm():
             quant_config_name = (
                 quant_config.get_name() if quant_config is not None else None
             )
@@ -329,7 +329,11 @@ class GptOssSparseMoeBlock(nn.Module):
             topk_output = self.topk(router_input, router_logits)
             final_hidden_states = self.experts(hidden_states, topk_output)
 
-        if self.tp_size > 1 and not get_forward().fuse_mlp_allreduce:
+        if (
+            self.tp_size > 1
+            and not get_forward().fuse_mlp_allreduce
+            and not get_moe_a2a_backend().is_deepsymm()
+        ):
             final_hidden_states = tensor_model_parallel_all_reduce(final_hidden_states)
 
         # When input was pre-padded, FusedMoE.forward_impl captured the
@@ -637,6 +641,7 @@ class GptOssDecoderLayer(nn.Module):
             self.layer_communicator.should_fuse_mlp_allreduce_with_next_layer(
                 forward_batch
             )
+            and not get_moe_a2a_backend().is_deepsymm()
         )
 
         with get_forward().scoped(fuse_mlp_allreduce=fuse_mlp_allreduce):

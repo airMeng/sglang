@@ -68,6 +68,44 @@ _is_cpu = is_cpu()
 _is_npu = is_npu()
 _use_aiter = get_bool_env_var("SGLANG_USE_AITER") and _is_hip
 
+
+def _xpu_dispatch_tensors(dispatch_output: DispatchOutput):
+    from sglang.srt.layers.moe.token_dispatcher import DispatchOutputChecker
+
+    if DispatchOutputChecker.format_is_deepep_normal(dispatch_output):
+        valid_experts = dispatch_output.topk_ids >= 0
+        return (
+            dispatch_output.hidden_states,
+            dispatch_output.topk_weights * valid_experts,
+            dispatch_output.topk_ids.clamp_min(0),
+        )
+
+    assert DispatchOutputChecker.format_is_standard(dispatch_output)
+    return (
+        dispatch_output.hidden_states,
+        dispatch_output.topk_output.topk_weights,
+        dispatch_output.topk_output.topk_ids,
+    )
+
+
+def _xpu_combine_input(output: torch.Tensor, dispatch_output: DispatchOutput):
+    from sglang.srt.layers.moe.token_dispatcher import DispatchOutputChecker
+
+    if DispatchOutputChecker.format_is_deepep_normal(dispatch_output):
+        from sglang.srt.layers.moe.token_dispatcher.deepep import (
+            DeepEPNormalCombineInput,
+        )
+
+        return DeepEPNormalCombineInput(
+            hidden_states=output,
+            topk_ids=dispatch_output.topk_ids,
+            topk_weights=dispatch_output.topk_weights,
+        )
+
+    from sglang.srt.layers.moe.token_dispatcher.standard import StandardCombineInput
+
+    return StandardCombineInput(hidden_states=output)
+
 if _use_aiter:
     from aiter.ops.shuffle import shuffle_weight
     from aiter.tuned_gemm import tgemm
@@ -1041,12 +1079,9 @@ class UnquantizedFusedMoEMethod(FusedMoEMethodBase, BaseFusedOp):
     def forward_xpu(
         self,
         layer: torch.nn.Module,
-        dispatch_output: StandardDispatchOutput,
+        dispatch_output: DispatchOutput,
     ) -> CombineInput:
-        from sglang.srt.layers.moe.token_dispatcher import StandardCombineInput
-
-        x = dispatch_output.hidden_states
-        topk_output = dispatch_output.topk_output
+        x, topk_weights, topk_ids = _xpu_dispatch_tensors(dispatch_output)
 
         moe_runner_config = self.moe_runner_config
         assert moe_runner_config.activation in [
@@ -1057,10 +1092,12 @@ class UnquantizedFusedMoEMethod(FusedMoEMethodBase, BaseFusedOp):
 
         backend = self.runner.runner_backend
         if not get_moe_runner_backend().is_triton():
+            if x.shape[0] == 0:
+                return _xpu_combine_input(torch.empty_like(x), dispatch_output)
+
             # sgl-kernel-xpu path
             from sgl_kernel import fused_experts
 
-            topk_weights, topk_ids, _ = topk_output
             if moe_runner_config.apply_router_weight_on_input:
                 x = x * topk_weights.to(x.dtype)
                 topk_weights = torch.ones_like(topk_weights)
@@ -1076,7 +1113,7 @@ class UnquantizedFusedMoEMethod(FusedMoEMethodBase, BaseFusedOp):
                 gemm1_alpha=moe_runner_config.gemm1_alpha,
                 gemm1_limit=moe_runner_config.gemm1_clamp_limit,
             )
-            return StandardCombineInput(hidden_states=output)
+            return _xpu_combine_input(output, dispatch_output)
         else:
             assert backend.is_triton()
             assert (

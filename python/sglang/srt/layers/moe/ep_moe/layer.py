@@ -42,7 +42,7 @@ from sglang.srt.model_executor.runner_backend_utils.breakable_cuda_graph.context
 from sglang.srt.model_executor.runner_backend_utils.tc_piecewise_cuda_graph import (
     is_in_tc_piecewise_cuda_graph,
 )
-from sglang.srt.utils import get_bool_env_var, is_hip, is_npu
+from sglang.srt.utils import get_bool_env_var, is_hip, is_npu, is_xpu
 
 if TYPE_CHECKING:
     from sglang.srt.layers.moe.token_dispatcher import (
@@ -53,6 +53,7 @@ if TYPE_CHECKING:
 
 _is_hip = is_hip()
 _is_npu = is_npu()
+_is_xpu = is_xpu()
 _is_fp8_fnuz = is_fp8_fnuz()
 _use_aiter = get_bool_env_var("SGLANG_USE_AITER") and _is_hip
 
@@ -110,6 +111,12 @@ class DeepEPMoE(FusedMoE):
         elif _use_aiter:
             self.deprecate_flag = True
         elif _is_npu:
+            self.deprecate_flag = True
+        elif (
+            _is_xpu
+            and (quant_config is None or quant_config.get_name() == "mxfp4")
+            and get_moe_a2a_backend().is_deepsymm()
+        ):
             self.deprecate_flag = True
         elif deep_gemm_wrapper.ENABLE_JIT_DEEPGEMM and isinstance(
             quant_config, Fp8Config
@@ -355,7 +362,7 @@ def get_moe_impl_class(quant_config: Optional[QuantizationConfig]):
     # [TODO] kk, temporary solution
     if (
         get_moe_a2a_backend().is_mori()
-        or get_moe_a2a_backend().is_deepep()
+        or get_moe_a2a_backend().uses_deepep_dispatcher()
         or get_moe_a2a_backend().is_deepep_v2()
         or get_moe_a2a_backend().is_mooncake()
         or get_moe_a2a_backend().is_nixl()

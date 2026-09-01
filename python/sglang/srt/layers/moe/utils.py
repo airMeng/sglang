@@ -35,6 +35,7 @@ class MoeA2ABackend(Enum):
 
     NONE = "none"
     DEEPEP = "deepep"
+    DEEPSYMM = "deepsymm"
     MOONCAKE = "mooncake"
     NIXL = "nixl"
     MORI = "mori"
@@ -60,6 +61,12 @@ class MoeA2ABackend(Enum):
 
     def is_deepep(self):
         return self == MoeA2ABackend.DEEPEP
+
+    def is_deepsymm(self):
+        return self == MoeA2ABackend.DEEPSYMM
+
+    def uses_deepep_dispatcher(self):
+        return self in (MoeA2ABackend.DEEPEP, MoeA2ABackend.DEEPSYMM)
 
     def is_mooncake(self):
         return self == MoeA2ABackend.MOONCAKE
@@ -578,7 +585,7 @@ def is_deepep_class_backend() -> bool:
     """Return whether A2A combine occurs inside a DeepEP-family dispatcher."""
     b = get_moe_a2a_backend()
     return (
-        b.is_deepep()
+        b.uses_deepep_dispatcher()
         or b.is_deepep_v2()
         or b.is_mooncake()
         or b.is_mori()
